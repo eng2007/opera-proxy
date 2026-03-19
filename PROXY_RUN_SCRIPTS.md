@@ -8,6 +8,8 @@ This document describes the helper scripts added for launching many local `opera
 - `run-proxies-from-csv.bat`
 - `stop-opera-proxies.ps1`
 - `stop-opera-proxies.bat`
+- `tail-proxy-logs.ps1`
+- `tail-proxy-logs.bat`
 
 ## Purpose
 
@@ -22,6 +24,7 @@ Typical workflow:
 2. optionally filter by country and speed while generating the CSV
 3. run `run-proxies-from-csv.ps1` or `.bat`
 4. use `stop-opera-proxies.ps1` or `.bat` to stop all launched proxy processes
+5. use `tail-proxy-logs.ps1` to watch logs from one run in a single console
 
 ## `run-proxies-from-csv.ps1`
 
@@ -227,4 +230,52 @@ Stop them all later:
 
 ```powershell
 stop-opera-proxies.bat
+```
+
+## `tail-proxy-logs.ps1`
+
+This script tails logs for one launch run in a single console window.
+
+Behavior:
+
+- by default it picks the newest subdirectory inside `proxy-runs`
+- prints the last lines from each matching log file first
+- then polls for new lines and prints them with a file-name prefix
+- supports stdout-only or stderr-only viewing
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `-LogsDir` | string | `.\proxy-runs` | Base logs directory |
+| `-RunId` | string | latest run | Specific timestamped run directory to watch |
+| `-Tail` | int | `20` | Number of last lines to print before following |
+| `-PollMs` | int | `1000` | Poll interval in milliseconds |
+| `-StdoutOnly` | switch | off | Watch only `*-stdout.log` files |
+| `-StderrOnly` | switch | off | Watch only `*-stderr.log` files |
+
+### Examples
+
+Watch the latest run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tail-proxy-logs.ps1
+```
+
+Same command through the batch wrapper:
+
+```bat
+tail-proxy-logs.bat
+```
+
+Watch a specific run directory:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tail-proxy-logs.ps1 -RunId 20260319-104500
+```
+
+Watch only stderr logs:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tail-proxy-logs.ps1 -StderrOnly
 ```
