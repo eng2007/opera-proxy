@@ -18,7 +18,11 @@ param(
 
     [switch]$NoStopExisting,
 
-    [switch]$ShowWindows
+    [switch]$ShowWindows,
+
+    [switch]$Json,
+
+    [string]$JsonOutPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,8 +49,12 @@ if (-not $NoStopExisting) {
         throw "Stop script not found: $stopScriptPath"
     }
 
-    Write-Host "Stopping existing opera-proxy processes before launch..."
-    & $stopScriptPath -BinaryPath $resolvedBinaryPath
+    if (-not $Json) {
+        Write-Host "Stopping existing opera-proxy processes before launch..."
+        & $stopScriptPath -BinaryPath $resolvedBinaryPath
+    } else {
+        & $stopScriptPath -BinaryPath $resolvedBinaryPath | Out-Null
+    }
 }
 
 $rows = Import-Csv -Path $resolvedCsvPath
@@ -175,6 +183,33 @@ foreach ($row in $rows) {
 
 if ($launched.Count -eq 0) {
     throw "No proxy processes were launched."
+}
+
+if ($Json -or -not [string]::IsNullOrWhiteSpace($JsonOutPath)) {
+    $jsonPayload = [PSCustomObject]@{
+        records      = $launched
+        launched     = $launched.Count
+        sort_order   = $SortBy
+        logs_dir     = $runLogsDir
+        source_csv   = $resolvedCsvPath
+        start_port   = $StartPort
+        bind_address = $BindAddress
+    } | ConvertTo-Json -Depth 5 -Compress
+
+    if (-not [string]::IsNullOrWhiteSpace($JsonOutPath)) {
+        $jsonDir = Split-Path -Parent $JsonOutPath
+        if (-not [string]::IsNullOrWhiteSpace($jsonDir) -and -not (Test-Path $jsonDir)) {
+            New-Item -ItemType Directory -Path $jsonDir | Out-Null
+        }
+
+        [System.IO.File]::WriteAllText($JsonOutPath, $jsonPayload, [System.Text.Encoding]::UTF8)
+    }
+
+    if ($Json) {
+        [Console]::Out.WriteLine($jsonPayload)
+    }
+
+    return
 }
 
 $launched | Format-Table -AutoSize

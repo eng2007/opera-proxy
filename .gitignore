@@ -17,3 +17,7 @@ bin/
 *.snap
 opera-proxy
 /proxy-runs
+/node_modules
+/opera-proxy-gui/node_modules
+tmp-launch-result.json
+tmp-one-proxy.csv

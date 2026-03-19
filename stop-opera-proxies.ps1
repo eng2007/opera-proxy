@@ -1,5 +1,7 @@
 param(
-    [string]$BinaryPath = ".\bin\opera-proxy.windows-x64.exe"
+    [string]$BinaryPath = ".\bin\opera-proxy.windows-x64.exe",
+
+    [switch]$Json
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,8 +21,17 @@ if ([string]::IsNullOrWhiteSpace($binaryLeaf)) {
 $allCandidates = @(Get-Process -Name $binaryLeaf -ErrorAction SilentlyContinue)
 
 if (-not $allCandidates -or $allCandidates.Count -eq 0) {
-    Write-Host "No matching opera-proxy processes found."
-    exit 0
+    if ($Json) {
+        $jsonPayload = [PSCustomObject]@{
+            stopped = 0
+            records = @()
+            message = "No matching opera-proxy processes found."
+        } | ConvertTo-Json -Depth 4 -Compress
+        [Console]::Out.WriteLine($jsonPayload)
+    } else {
+        Write-Host "No matching opera-proxy processes found."
+    }
+    return
 }
 
 $toStop = @()
@@ -39,12 +50,31 @@ foreach ($proc in $allCandidates) {
 }
 
 if (-not $toStop -or $toStop.Count -eq 0) {
-    Write-Host "No matching opera-proxy processes found for path $resolvedBinaryPath"
-    exit 0
+    if ($Json) {
+        $jsonPayload = [PSCustomObject]@{
+            stopped = 0
+            records = @()
+            message = "No matching opera-proxy processes found for path $resolvedBinaryPath"
+        } | ConvertTo-Json -Depth 4 -Compress
+        [Console]::Out.WriteLine($jsonPayload)
+    } else {
+        Write-Host "No matching opera-proxy processes found for path $resolvedBinaryPath"
+    }
+    return
 }
 
 foreach ($procInfo in $toStop) {
     Stop-Process -Id $procInfo.pid -Force
+}
+
+if ($Json) {
+    $jsonPayload = [PSCustomObject]@{
+        stopped = $toStop.Count
+        records = $toStop
+    } | ConvertTo-Json -Depth 4 -Compress
+
+    [Console]::Out.WriteLine($jsonPayload)
+    return
 }
 
 $toStop | Format-Table -AutoSize

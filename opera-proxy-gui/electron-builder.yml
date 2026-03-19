@@ -1,0 +1,25 @@
+appId: com.opera-proxy.gui
+productName: opera-proxy GUI
+directories:
+  output: release
+files:
+  - dist/**
+  - dist-electron/**
+extraResources:
+  - from: ../bin
+    to: bin
+  - from: ../run-proxies-from-csv.ps1
+    to: scripts/run-proxies-from-csv.ps1
+  - from: ../stop-opera-proxies.ps1
+    to: scripts/stop-opera-proxies.ps1
+  - from: ../tail-proxy-logs.ps1
+    to: scripts/tail-proxy-logs.ps1
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+    - zip
+nsis:
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
