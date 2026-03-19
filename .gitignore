@@ -16,3 +16,4 @@
 bin/
 *.snap
 opera-proxy
+/proxy-runs

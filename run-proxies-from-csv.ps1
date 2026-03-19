@@ -1,6 +1,5 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$CsvPath,
+    [string]$CsvPath = ".\proxies.csv",
 
     [int]$StartPort = 8080,
 
@@ -17,7 +16,9 @@ param(
     [ValidateSet("speed", "country", "ip")]
     [string]$SortBy = "speed",
 
-    [switch]$NoStopExisting
+    [switch]$NoStopExisting,
+
+    [switch]$ShowWindows
 )
 
 $ErrorActionPreference = "Stop"
@@ -155,6 +156,7 @@ foreach ($row in $rows) {
         -ArgumentList $arguments `
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath `
+        -WindowStyle $(if ($ShowWindows) { "Normal" } else { "Hidden" }) `
         -PassThru
 
     $launched += [PSCustomObject]@{

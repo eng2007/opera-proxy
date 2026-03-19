@@ -57,7 +57,7 @@ These become required if you use:
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `-CsvPath` | string | required | Path to CSV file with proxies |
+| `-CsvPath` | string | `.\proxies.csv` | Path to CSV file with proxies |
 | `-StartPort` | int | `8080` | First local port to bind |
 | `-BinaryPath` | string | `.\bin\opera-proxy.windows-x64.exe` | Path to binary to start |
 | `-BindAddress` | string | `127.0.0.1` | Local bind address |
@@ -66,6 +66,7 @@ These become required if you use:
 | `-MaxSpeedMs` | int | none | Skip rows slower than this limit |
 | `-SortBy` | string | `speed` | Sort rows by `speed`, `country`, or `ip` |
 | `-NoStopExisting` | switch | off | Do not stop existing proxy processes before launch |
+| `-ShowWindows` | switch | off | Show console windows for started proxy processes |
 
 ### Default behavior
 
@@ -79,6 +80,20 @@ If you want to keep existing instances alive, pass:
 
 ```powershell
 -NoStopExisting
+```
+
+### Window behavior
+
+By default started proxy processes are launched with hidden windows because:
+
+- stdout is redirected to log files
+- stderr is redirected to log files
+- visible console windows would otherwise look empty
+
+If you want to see individual proxy windows, pass:
+
+```powershell
+-ShowWindows
 ```
 
 ### Sort behavior
@@ -106,13 +121,13 @@ If you want to keep existing instances alive, pass:
 Launch all rows from `proxies.csv` starting at local port `8080`:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\run-proxies-from-csv.ps1 -CsvPath .\proxies.csv
+powershell -NoProfile -ExecutionPolicy Bypass -File .\run-proxies-from-csv.ps1
 ```
 
 Same command through the batch wrapper:
 
 ```bat
-run-proxies-from-csv.bat -CsvPath .\proxies.csv
+run-proxies-from-csv.bat
 ```
 
 Launch only successful speed checks up to `1500` ms:
