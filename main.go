@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -132,6 +133,8 @@ type CLIArgs struct {
 	initRetryInterval      time.Duration
 	caFile                 string
 	fakeSNI                string
+	proxyBlacklistFile     string
+	proxyBlacklist         map[string]struct{}
 	overrideProxyAddress   string
 	proxySpeedTestURL      string
 	proxySpeedTimeout      time.Duration
@@ -194,6 +197,7 @@ func parse_args() *CLIArgs {
 	flag.DurationVar(&args.initRetryInterval, "init-retry-interval", 5*time.Second, "delay between initialization retries")
 	flag.StringVar(&args.caFile, "cafile", "", "use custom CA certificate bundle file")
 	flag.StringVar(&args.fakeSNI, "fake-SNI", "", "domain name to use as SNI in communications with servers")
+	flag.StringVar(&args.proxyBlacklistFile, "proxy-blacklist", "", "path to file with blacklisted proxy addresses, one host[:port] per line")
 	flag.StringVar(&args.overrideProxyAddress, "override-proxy-address", "", "use fixed proxy address instead of server address returned by SurfEasy API")
 	flag.StringVar(&args.proxySpeedTestURL, "proxy-speed-test-url", "https://ajax.googleapis.com/ajax/libs/angularjs/1.8.2/angular.min.js",
 		"URL used to measure proxy response time")
@@ -268,6 +272,16 @@ func run() int {
 		log.LstdFlags|log.Lshortfile)
 
 	mainLogger.Info("opera-proxy client version %s is starting...", version())
+
+	proxyBlacklist, err := loadProxyBlacklist(args.proxyBlacklistFile)
+	if err != nil {
+		mainLogger.Error("Can't load proxy blacklist file %q: %v", args.proxyBlacklistFile, err)
+		return 18
+	}
+	args.proxyBlacklist = proxyBlacklist
+	if len(args.proxyBlacklist) > 0 {
+		mainLogger.Info("Loaded %d blacklisted proxy endpoints from %s.", len(args.proxyBlacklist), args.proxyBlacklistFile)
+	}
 
 	var d dialer.ContextDialer = &net.Dialer{
 		Timeout:   30 * time.Second,
@@ -452,9 +466,7 @@ func run() int {
 
 	if args.overrideProxyAddress == "" {
 		err = try("discover", func() error {
-			ctx, cl := context.WithTimeout(context.Background(), args.timeout)
-			defer cl()
-			res, err := seclient.Discover(ctx, fmt.Sprintf("\"%s\",,", args.country))
+			res, err := discoverCountry(args, seclient, mainLogger, args.country)
 			if err != nil {
 				return err
 			}
@@ -484,7 +496,7 @@ func run() int {
 			for i, ep := range res {
 				dialers[i] = handlerDialerFactory(args.country, ep.NetAddr())
 			}
-			ctx, cl = context.WithTimeout(context.Background(), args.serverSelectionTimeout)
+			ctx, cl := context.WithTimeout(context.Background(), args.serverSelectionTimeout)
 			defer cl()
 			handlerDialer, err = ss(ctx, dialers)
 			if err != nil {
@@ -502,6 +514,10 @@ func run() int {
 		}
 	} else {
 		sanitizedEndpoint := sanitizeFixedProxyAddress(args.overrideProxyAddress)
+		if _, ok := args.proxyBlacklist[sanitizedEndpoint]; ok {
+			mainLogger.Critical("Endpoint override %s is blacklisted.", sanitizedEndpoint)
+			return 12
+		}
 		handlerDialer = handlerDialerFactory(args.country, sanitizedEndpoint)
 		mainLogger.Info("Endpoint override: %s", sanitizedEndpoint)
 	}
@@ -673,6 +689,85 @@ func sanitizeFixedProxyAddress(addr string) string {
 	return net.JoinHostPort(addr, "443")
 }
 
+func loadProxyBlacklist(filename string) (map[string]struct{}, error) {
+	if filename == "" {
+		return nil, nil
+	}
+
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	blacklist := make(map[string]struct{})
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if idx := strings.Index(line, "#"); idx >= 0 {
+			line = line[:idx]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		blacklist[sanitizeFixedProxyAddress(line)] = struct{}{}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return blacklist, nil
+}
+
+func filterBlacklistedProxyEntries(entries []se.SEIPEntry, blacklist map[string]struct{}) ([]se.SEIPEntry, []string) {
+	if len(blacklist) == 0 {
+		return entries, nil
+	}
+
+	filtered := make([]se.SEIPEntry, 0, len(entries))
+	blocked := make([]string, 0)
+	blockedSeen := make(map[string]struct{})
+	appendBlocked := func(addr string) {
+		if _, ok := blockedSeen[addr]; ok {
+			return
+		}
+		blockedSeen[addr] = struct{}{}
+		blocked = append(blocked, addr)
+	}
+
+	for _, entry := range entries {
+		if len(entry.Ports) == 0 {
+			addr := net.JoinHostPort(entry.IP, "443")
+			if _, ok := blacklist[addr]; ok {
+				appendBlocked(addr)
+				continue
+			}
+			filtered = append(filtered, entry)
+			continue
+		}
+
+		ports := make([]uint16, 0, len(entry.Ports))
+		for _, port := range entry.Ports {
+			addr := net.JoinHostPort(entry.IP, strconv.Itoa(int(port)))
+			if _, ok := blacklist[addr]; ok {
+				appendBlocked(addr)
+				continue
+			}
+			ports = append(ports, port)
+		}
+		if len(ports) == 0 {
+			continue
+		}
+		filtered = append(filtered, se.SEIPEntry{
+			Geo:   entry.Geo,
+			IP:    entry.IP,
+			Ports: ports,
+		})
+	}
+
+	return filtered, blocked
+}
+
 type proxyEndpointKey struct {
 	countryCode string
 	ip          string
@@ -722,6 +817,20 @@ func parseCountryFilters(raw string) ([]string, bool) {
 	return res, false
 }
 
+func proxyEndpointAddrs(entries []se.SEIPEntry) []string {
+	addrs := make([]string, 0, countProxyPorts(entries))
+	for _, entry := range entries {
+		if len(entry.Ports) == 0 {
+			addrs = append(addrs, net.JoinHostPort(entry.IP, "443"))
+			continue
+		}
+		for _, port := range entry.Ports {
+			addrs = append(addrs, net.JoinHostPort(entry.IP, strconv.Itoa(int(port))))
+		}
+	}
+	return addrs
+}
+
 func discoverCountry(args *CLIArgs, seclient *se.SEClient, logger *clog.CondLogger, countryCode string) ([]se.SEIPEntry, error) {
 	seen := make(map[proxyEndpointKey]struct{})
 	aggregated := make([]se.SEIPEntry, 0)
@@ -733,7 +842,11 @@ func discoverCountry(args *CLIArgs, seclient *se.SEClient, logger *clog.CondLogg
 		if err != nil {
 			return nil, err
 		}
-		logger.Info("Discover for country %s returned %d endpoints on pass #%d.", countryCode, len(res), attempt)
+		logger.Info("Discover for country %s returned %d endpoints on pass #%d: %v", countryCode, len(res), attempt, proxyEndpointAddrs(res))
+		res, blocked := filterBlacklistedProxyEntries(res, args.proxyBlacklist)
+		if len(blocked) > 0 {
+			logger.Info("Discover for country %s skipped %d blacklisted endpoints on pass #%d: %v", countryCode, len(blocked), attempt, blocked)
+		}
 		aggregated = appendUniqueProxies(aggregated, res, seen)
 	}
 	sortProxyEntries(aggregated)

@@ -1,5 +1,4 @@
 # Binaries for programs and plugins
-*.exe
 *.exe~
 *.dll
 *.so
@@ -13,7 +12,6 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
-bin/
 *.snap
 opera-proxy
 /proxy-runs
@@ -21,3 +19,4 @@ opera-proxy
 /opera-proxy-gui/node_modules
 tmp-launch-result.json
 tmp-one-proxy.csv
+opera-proxy-gui/release/win-unpacked/opera-proxy GUI.exe
