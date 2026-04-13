@@ -85,6 +85,7 @@ type SEGeoListResponse struct {
 
 type SEIPEntry struct {
 	Geo   SEGeoEntry `json:"geo"`
+	Host  string     `json:"host,omitempty"`
 	IP    string     `json:"ip"`
 	Ports []uint16   `json:"ports"`
 }
