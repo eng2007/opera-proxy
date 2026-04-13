@@ -38,8 +38,9 @@ import (
 )
 
 const (
-	API_DOMAIN   = "api2.sec-tunnel.com"
-	PROXY_SUFFIX = "sec-tunnel.com"
+	API_DOMAIN                  = "api2.sec-tunnel.com"
+	PROXY_SUFFIX                = "sec-tunnel.com"
+	DEFAULT_FALLBACK_PROXY_FILE = "fallback-endpoints.txt"
 )
 
 func perror(msg string) {
@@ -135,6 +136,7 @@ type CLIArgs struct {
 	fakeSNI                string
 	proxyBlacklistFile     string
 	proxyBlacklist         map[string]struct{}
+	fallbackProxyFile      string
 	overrideProxyAddress   string
 	proxySpeedTestURL      string
 	proxySpeedTimeout      time.Duration
@@ -198,6 +200,7 @@ func parse_args() *CLIArgs {
 	flag.StringVar(&args.caFile, "cafile", "", "use custom CA certificate bundle file")
 	flag.StringVar(&args.fakeSNI, "fake-SNI", "", "domain name to use as SNI in communications with servers")
 	flag.StringVar(&args.proxyBlacklistFile, "proxy-blacklist", "", "path to file with blacklisted proxy addresses, one host[:port] per line")
+	flag.StringVar(&args.fallbackProxyFile, "fallback-proxy-file", DEFAULT_FALLBACK_PROXY_FILE, "path to file with fallback proxy addresses used on API error 801, one host[:port] per line")
 	flag.StringVar(&args.overrideProxyAddress, "override-proxy-address", "", "use fixed proxy address instead of server address returned by SurfEasy API")
 	flag.StringVar(&args.proxySpeedTestURL, "proxy-speed-test-url", "https://ajax.googleapis.com/ajax/libs/angularjs/1.8.2/angular.min.js",
 		"URL used to measure proxy response time")
@@ -719,6 +722,73 @@ func loadProxyBlacklist(filename string) (map[string]struct{}, error) {
 	return blacklist, nil
 }
 
+func loadFallbackProxyEntries(filename, countryCode string) ([]se.SEIPEntry, error) {
+	if filename == "" {
+		return nil, nil
+	}
+
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	entriesByIP := make(map[string]map[uint16]struct{})
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if idx := strings.Index(line, "#"); idx >= 0 {
+			line = line[:idx]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		addr := sanitizeFixedProxyAddress(line)
+		host, portStr, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid fallback proxy address %q: %w", line, err)
+		}
+		portValue, err := strconv.ParseUint(portStr, 10, 16)
+		if err != nil {
+			return nil, fmt.Errorf("invalid fallback proxy address %q: %w", line, err)
+		}
+
+		ports := entriesByIP[host]
+		if ports == nil {
+			ports = make(map[uint16]struct{})
+			entriesByIP[host] = ports
+		}
+		ports[uint16(portValue)] = struct{}{}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	entries := make([]se.SEIPEntry, 0, len(entriesByIP))
+	for ip, portsSet := range entriesByIP {
+		ports := make([]uint16, 0, len(portsSet))
+		for port := range portsSet {
+			ports = append(ports, port)
+		}
+		sort.Slice(ports, func(i, j int) bool {
+			return ports[i] < ports[j]
+		})
+		entries = append(entries, se.SEIPEntry{
+			Geo: se.SEGeoEntry{
+				CountryCode: countryCode,
+				Country:     countryCode,
+			},
+			IP:    ip,
+			Ports: ports,
+		})
+	}
+
+	sortProxyEntries(entries)
+	return entries, nil
+}
+
 func filterBlacklistedProxyEntries(entries []se.SEIPEntry, blacklist map[string]struct{}) ([]se.SEIPEntry, []string) {
 	if len(blacklist) == 0 {
 		return entries, nil
@@ -840,6 +910,25 @@ func discoverCountry(args *CLIArgs, seclient *se.SEClient, logger *clog.CondLogg
 		res, err := seclient.Discover(ctx, requestedGeo)
 		cl()
 		if err != nil {
+			var apiErr *se.APIError
+			if errors.As(err, &apiErr) && apiErr.Code == 801 {
+				fallbackEntries, fallbackErr := loadFallbackProxyEntries(args.fallbackProxyFile, countryCode)
+				if fallbackErr != nil {
+					return nil, fmt.Errorf("discover for country %s failed with API error 801 and fallback file %q could not be loaded: %w", countryCode, args.fallbackProxyFile, fallbackErr)
+				}
+				if len(fallbackEntries) == 0 {
+					return nil, fmt.Errorf("discover for country %s failed with API error 801 and fallback file %q is empty", countryCode, args.fallbackProxyFile)
+				}
+				logger.Warning("Discover for country %s got API error 801 on pass #%d. Using %d fallback endpoints from %s.", countryCode, attempt, countProxyPorts(fallbackEntries), args.fallbackProxyFile)
+				fallbackEntries, blocked := filterBlacklistedProxyEntries(fallbackEntries, args.proxyBlacklist)
+				if len(blocked) > 0 {
+					logger.Info("Fallback endpoints for country %s skipped %d blacklisted addresses: %v", countryCode, len(blocked), blocked)
+				}
+				if len(fallbackEntries) == 0 {
+					return nil, fmt.Errorf("discover for country %s failed with API error 801 and all fallback endpoints from %q are blacklisted", countryCode, args.fallbackProxyFile)
+				}
+				return fallbackEntries, nil
+			}
 			return nil, err
 		}
 		logger.Info("Discover for country %s returned %d endpoints on pass #%d: %v", countryCode, len(res), attempt, proxyEndpointAddrs(res))
