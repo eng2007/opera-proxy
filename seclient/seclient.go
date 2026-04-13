@@ -153,8 +153,7 @@ func (c *SEClient) register(ctx context.Context) error {
 	}
 
 	if regRes.Status.Code != SE_STATUS_OK {
-		return fmt.Errorf("API responded with error message: code=%d, msg=\"%s\"",
-			regRes.Status.Code, regRes.Status.Message)
+		return newAPIError(regRes.Status)
 	}
 	return nil
 }
@@ -174,8 +173,7 @@ func (c *SEClient) RegisterDevice(ctx context.Context) error {
 	}
 
 	if regRes.Status.Code != SE_STATUS_OK {
-		return fmt.Errorf("API responded with error message: code=%d, msg=\"%s\"",
-			regRes.Status.Code, regRes.Status.Message)
+		return newAPIError(regRes.Status)
 	}
 
 	c.AssignedDeviceID = regRes.Data.DeviceID
@@ -197,8 +195,7 @@ func (c *SEClient) GeoList(ctx context.Context) ([]SEGeoEntry, error) {
 	}
 
 	if geoListRes.Status.Code != SE_STATUS_OK {
-		return nil, fmt.Errorf("API responded with error message: code=%d, msg=\"%s\"",
-			geoListRes.Status.Code, geoListRes.Status.Message)
+		return nil, newAPIError(geoListRes.Status)
 	}
 
 	return geoListRes.Data.Geos, nil
@@ -218,8 +215,7 @@ func (c *SEClient) Discover(ctx context.Context, requestedGeo string) ([]SEIPEnt
 	}
 
 	if discoverRes.Status.Code != SE_STATUS_OK {
-		return nil, fmt.Errorf("API responded with error message: code=%d, msg=\"%s\"",
-			discoverRes.Status.Code, discoverRes.Status.Message)
+		return nil, newAPIError(discoverRes.Status)
 	}
 
 	return discoverRes.Data.IPs, nil
@@ -245,8 +241,7 @@ func (c *SEClient) Login(ctx context.Context) error {
 	}
 
 	if loginRes.Status.Code != SE_STATUS_OK {
-		return fmt.Errorf("API responded with error message: code=%d, msg=\"%s\"",
-			loginRes.Status.Code, loginRes.Status.Message)
+		return newAPIError(loginRes.Status)
 	}
 	return nil
 }
@@ -264,8 +259,7 @@ func (c *SEClient) DeviceGeneratePassword(ctx context.Context) error {
 	}
 
 	if genRes.Status.Code != SE_STATUS_OK {
-		return fmt.Errorf("API responded with error message: code=%d, msg=\"%s\"",
-			genRes.Status.Code, genRes.Status.Message)
+		return newAPIError(genRes.Status)
 	}
 
 	c.DevicePassword = genRes.Data.DevicePassword
