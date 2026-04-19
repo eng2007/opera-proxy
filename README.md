@@ -109,6 +109,14 @@ You can also download the proxy list from a URL. If the download fails, the app 
 $ ./opera-proxy -api-proxy-list-url https://example.com/proxies.txt -api-proxy-file proxies.txt -country EU
 ```
 
+If you want selected destinations to go directly instead of through the Opera proxy, use `-proxy-bypass`. It accepts a comma-separated list of host or URL patterns and supports `*` in hostnames:
+
+```
+$ ./opera-proxy -country EU -proxy-bypass "api2.sec-tunnel.com,*.example.com,https://download.test.local/list.txt"
+```
+
+If `-proxy-bypass` is not passed, the app also tries to read `proxy-bypass.txt` from the current working directory. The file supports one pattern per line, comments via `#`, and comma-separated values on the same line.
+
 If SurfEasy discover returns API error `801`, the app also automatically tries `proxies.csv` from the current working directory, even when `-discover-csv` was not passed.
 
 ## List of arguments
@@ -138,6 +146,7 @@ If SurfEasy discover returns API error `801`, the app also automatically tries `
 | list-countries | - | list available countries and exit |
 | list-proxies | - | output proxy list and exit |
 | override-proxy-address | string | use fixed proxy address instead of server address returned by SurfEasy API |
+| proxy-bypass | String | comma-separated list of destination host or URL patterns that should bypass proxying and connect directly; matching is case-insensitive and supports `*` in hostnames; if omitted, `proxy-bypass.txt` from the current working directory is loaded automatically when present |
 | proxy-blacklist | String | path to file with blacklisted proxy addresses, one `host[:port]` per line |
 | proxy | String | sets base proxy to use for all dial-outs. Format: `<http\|https\|socks5\|socks5h>://[login:password@]host[:port]` Examples: `http://user:password@192.168.1.1:3128`, `socks5://10.0.0.1:1080` |
 | refresh | Duration | login refresh interval (default 4h0m0s) |

@@ -41,6 +41,7 @@ const (
 	API_DOMAIN                 = "api2.sec-tunnel.com"
 	PROXY_SUFFIX               = "sec-tunnel.com"
 	DefaultDiscoverCSVFallback = "proxies.csv"
+	DefaultProxyBypassFallback = "proxy-bypass.txt"
 )
 
 func perror(msg string) {
@@ -140,6 +141,7 @@ type CLIArgs struct {
 	initRetryInterval      time.Duration
 	caFile                 string
 	fakeSNI                string
+	proxyBypass            *CSVArg
 	proxyBlacklistFile     string
 	proxyBlacklist         map[string]struct{}
 	overrideProxyAddress   string
@@ -167,6 +169,7 @@ func parse_args() *CLIArgs {
 				"https://doh.cleanbrowsing.org/doh/adult-filter/",
 			},
 		},
+		proxyBypass:     &CSVArg{},
 		serverSelection: serverSelectionArg{dialer.ServerSelectionFastest},
 	}
 	flag.StringVar(&args.country, "country", "EU", "desired proxy location; for list-proxies-all modes supports comma-separated codes or ALL")
@@ -190,6 +193,7 @@ func parse_args() *CLIArgs {
 	flag.StringVar(&args.proxy, "proxy", "", "sets base proxy to use for all dial-outs. "+
 		"Format: <http|https|socks5|socks5h>://[login:password@]host[:port] "+
 		"Examples: http://user:password@192.168.1.1:3128, socks5://10.0.0.1:1080")
+	flag.Var(args.proxyBypass, "proxy-bypass", "comma-separated list of destination host or URL patterns that should bypass proxying and connect directly; matching is case-insensitive and supports * in hostnames")
 	flag.StringVar(&args.apiClientVersion, "api-client-version", se.DefaultSESettings.ClientVersion, "client version reported to SurfEasy API")
 	flag.StringVar(&args.apiClientType, "api-client-type", se.DefaultSESettings.ClientType, "client type reported to SurfEasy API")
 	flag.StringVar(&args.apiUserAgent, "api-user-agent", se.DefaultSESettings.UserAgent, "user agent reported to SurfEasy API")
@@ -348,6 +352,48 @@ func loadAPIProxyList(filename string) ([]string, error) {
 	}
 	defer f.Close()
 	return loadAPIProxyListFromReader(f, fmt.Sprintf("file %q", filename))
+}
+
+func loadProxyBypassList(filename string) ([]string, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	seen := make(map[string]struct{})
+	patterns := make([]string, 0)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if idx := strings.Index(line, "#"); idx >= 0 {
+			line = line[:idx]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		var parsed CSVArg
+		if err := parsed.Set(line); err != nil {
+			return nil, fmt.Errorf("unable to parse proxy bypass entry %q from %s: %w", line, filename, err)
+		}
+		for _, value := range parsed.values {
+			pattern := strings.TrimSpace(value)
+			if pattern == "" {
+				continue
+			}
+			if _, ok := seen[pattern]; ok {
+				continue
+			}
+			seen[pattern] = struct{}{}
+			patterns = append(patterns, pattern)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("unable to read proxy bypass list %q: %w", filename, err)
+	}
+	return patterns, nil
 }
 
 func loadAPIProxyListFromURL(listURL string, transport http.RoundTripper, timeout time.Duration) ([]string, error) {
@@ -641,6 +687,7 @@ func run() int {
 
 	xproxy.RegisterDialerType("http", proxyFromURLWrapper)
 	xproxy.RegisterDialerType("https", proxyFromURLWrapper)
+	directDialer := d
 	if args.proxy != "" {
 		proxyURL, err := url.Parse(args.proxy)
 		if err != nil {
@@ -654,6 +701,16 @@ func run() int {
 		}
 		d = pxDialer.(dialer.ContextDialer)
 	}
+	if len(args.proxyBypass.values) == 0 {
+		fallbackPatterns, err := loadProxyBypassList(proxyBypassPathForFallback())
+		if err == nil {
+			args.proxyBypass.values = fallbackPatterns
+		} else if !errors.Is(err, os.ErrNotExist) {
+			mainLogger.Critical("Unable to load proxy bypass list: %v", err)
+			return 7
+		}
+	}
+	mainLogger.Info("Proxy bypass loaded: %d rule(s).", len(args.proxyBypass.values))
 
 	try := retryPolicy(args.initRetries, args.initRetryInterval, mainLogger)
 	if args.apiAddress != "" {
@@ -941,6 +998,14 @@ func run() int {
 			},
 		}, sanitizedEndpoint)
 		mainLogger.Info("Endpoint override: %s", sanitizedEndpoint)
+	}
+	if len(args.proxyBypass.values) > 0 {
+		bypassDialer, err := dialer.NewBypassDialer(args.proxyBypass.values, directDialer, handlerDialer)
+		if err != nil {
+			mainLogger.Critical("Unable to configure proxy bypass rules: %v", err)
+			return 7
+		}
+		handlerDialer = bypassDialer
 	}
 
 	clock.RunTicker(context.Background(), args.refresh, args.refreshRetry, func(ctx context.Context) error {
@@ -1410,6 +1475,10 @@ func discoverCSVPathForFallback(args *CLIArgs) string {
 		return args.discoverCSV
 	}
 	return DefaultDiscoverCSVFallback
+}
+
+func proxyBypassPathForFallback() string {
+	return DefaultProxyBypassFallback
 }
 
 func loadProxyEntriesFromCSV(filename string, countryFilter string, allowAll bool, countryExplicit bool, blacklist map[string]struct{}) ([]se.SEIPEntry, error) {
